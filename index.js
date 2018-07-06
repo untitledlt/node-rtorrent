@@ -11,9 +11,8 @@ function Rtorrent(option) {
     this.path = (option && option['path']) || "/RPC2";
     this.user = (option && option['user']) || null;
     this.pass = (option && option['pass']) || null;
-    this.ssl  = (option && option['ssl'])  || false;
     this.client = null;
-    
+
     if (this.mode == 'xmlrpc')
     {
         options = {
@@ -36,7 +35,7 @@ function Rtorrent(option) {
             }
         }
 
-        this.client = (this.ssl) ? xmlrpc.createSecureClient(options) : xmlrpc.createClient(options);
+        this.client = xmlrpc.createClient(options);
     }
     else
     {
@@ -46,6 +45,11 @@ function Rtorrent(option) {
 
 
 Rtorrent.prototype.get = function(method, param, callback) {
+    //this.get('load_start', [link], callback);
+    //this.get('load.raw_start', [filecontent], callback);
+
+    // scgi.methodCall('system.multicall', [this.requests])
+
     return this.getXmlrpc(method, param, callback);
 };
 
@@ -53,8 +57,8 @@ Rtorrent.prototype.getXmlrpc = function(method, params, callback ) {
     this.client.methodCall(method, params, callback);
 };
 
-Rtorrent.prototype.execute = function(cmd, callback) {
-    return this.get('execute_capture', ['bash', '-c', cmd], callback);
+Rtorrent.prototype.execute = function(cmdArray, callback) {
+    return this.get('execute_capture', cmdArray, callback);
 };
 
 Rtorrent.prototype.getMulticall = function(method, param, cmds, callback) {
@@ -130,6 +134,20 @@ Rtorrent.prototype.getAll = function(callback) {
     });
 };
 
+Rtorrent.prototype.getTorrent = function(hash, callback) {
+    this.getTorrents(function (err, torrents) {
+        if (err) return callback(err);
+
+        var found = null;
+
+        torrents.map(function(torrent) {
+            if (torrent.hash == hash)
+                found = torrent;
+        });
+
+        callback(null, found);
+    });
+}
 Rtorrent.prototype.getTorrents = function(callback) {
     var self = this;
 
@@ -190,7 +208,7 @@ Rtorrent.prototype.systemMulticall = function(cmds, callback) {
 };
 
 Rtorrent.prototype.getGlobals = function(callback) {
-   this.systemMulticall(fields.global, callback);
+    this.systemMulticall(fields.global, callback);
 };
 
 Rtorrent.prototype.start = function(hash, callback) {
@@ -212,7 +230,51 @@ Rtorrent.prototype.stop = function(hash, callback) {
 };
 
 Rtorrent.prototype.remove = function(hash, callback) {
-    this.get('d.erase', [hash], callback);
+    var self = this;
+    self.getTorrent(hash, function (err, data) {
+        if (err || !data) return callback(err);
+
+        var params = ['rm', '-rf'];
+        if (data.torrent) params.push(data.torrent);
+        if (data.torrentsession) params.push(data.torrentsession);
+        if (data.path) params.push(data.path);
+        if (params.length === 2) return callback(err);
+
+        self.get('d.erase', [hash], function (err, data) {
+            if (err) return callback(err);
+
+            self.execute(params, function(err, data) {
+                if (err) return callback(err);
+
+                callback(err, data);
+            });
+        });
+    });
+};
+
+Rtorrent.prototype.load = function(options, callback) {
+    const { url, filePath, custom } = options;
+
+    let action;
+    const params = [''];
+
+    if (filePath) {
+        params.push(fs.readFileSync(filePath));
+        action = 'load.raw_start';
+
+    } else if (url) {
+        params.push(url);
+        action = 'load.start'
+
+    } else {
+        throw 'No URL or filePath specified!';
+    }
+
+    if (custom) {
+        params.push(`d.custom1.set="${custom}"`)
+    }
+
+    this.get(action, params, callback);
 };
 
 Rtorrent.prototype.loadLink = function(link, callback) {
@@ -241,14 +303,12 @@ module.exports = Rtorrent;
 
 var fields = {
     global: {
-        up_rate: 'get_up_rate',
-        down_rate: 'get_down_rate',
-        up_total: 'get_up_total',
-        down_total: 'get_down_total',
         bind: 'get_bind',
         check_hash: 'get_check_hash',
         dht_port: 'get_dht_port',
         directory: 'get_directory',
+        down_rate: 'get_down_rate',
+        down_total: 'get_down_total',
         download_rate: 'get_download_rate',
         http_cacert: 'get_http_cacert',
         http_capath: 'get_http_capath',
@@ -260,15 +320,16 @@ var fields = {
         max_memory_usage: 'get_max_memory_usage',
         max_open_files: 'get_max_open_files',
         max_open_http: 'get_max_open_http',
+        max_open_sockets: 'get_max_open_sockets',
         max_peers: 'get_max_peers',
         max_peers_seed: 'get_max_peers_seed',
         max_uploads: 'get_max_uploads',
+        max_uploads_div: 'get_max_uploads_div',
         max_uploads_global: 'get_max_uploads_global',
-        min_peers_seed: 'get_min_peers_seed',
         min_peers: 'get_min_peers',
+        min_peers_seed: 'get_min_peers_seed',
         peer_exchange: 'get_peer_exchange',
         port_open: 'get_port_open',
-        upload_rate: 'get_upload_rate',
         port_random: 'get_port_random',
         port_range: 'get_port_range',
         preload_min_size: 'get_preload_min_size',
@@ -287,9 +348,10 @@ var fields = {
         timeout_safe_sync: 'get_timeout_safe_sync',
         timeout_sync: 'get_timeout_sync',
         tracker_numwant: 'get_tracker_numwant',
+        up_rate: 'get_up_rate',
+        up_total: 'get_up_total',
+        upload_rate: 'get_upload_rate',
         use_udp_trackers: 'get_use_udp_trackers',
-        max_uploads_div: 'get_max_uploads_div',
-        max_open_sockets: 'get_max_open_sockets'
     },
     peers: {
         address: 'p.get_address',
@@ -303,64 +365,65 @@ var fields = {
         up_total: 'p.get_up_total'
     },
     files: {
-        range_first: 'f.get_range_first',
-        range_second: 'f.get_range_second',
-        size: 'f.get_size_bytes',
         chunks: 'f.get_size_chunks',
         completed_chunks: 'f.get_completed_chunks',
         fullpath: 'f.get_frozen_path',
-        path: 'f.get_path',
-        priority: 'f.get_priority',
         is_created: 'f.is_created=',
         is_open: 'f.is_open=',
         last_touched: 'f.get_last_touched=',
         match_depth_next: 'f.get_match_depth_next=',
         match_depth_prev: 'f.get_match_depth_prev=',
         offset: 'f.get_offset=',
+        path: 'f.get_path',
         path_components: 'f.get_path_components=',
         path_depth: 'f.get_path_depth=',
+        priority: 'f.get_priority',
+        range_first: 'f.get_range_first',
+        range_second: 'f.get_range_second',
+        size: 'f.get_size_bytes',
     },
     trackers: {
-        id: 't.get_id',
-        group: 't.get_group',
-        type: 't.get_type',
-        url: 't.get_url',
         enabled: 't.is_enabled',
-        open: 't.is_open',
+        group: 't.get_group',
+        id: 't.get_id',
         min_interval: 't.get_min_interval',
         normal_interval: 't.get_normal_interval',
+        open: 't.is_open',
         scrape_complete: 't.get_scrape_complete',
         scrape_downloaded: 't.get_scrape_downloaded',
         scrape_incomplete: 't.get_scrape_incomplete',
         scrape_time_last: 't.get_scrape_time_last',
+        type: 't.get_type',
+        url: 't.get_url',
     },
     torrents: {
-        hash: 'd.get_hash',
-        torrent: 'd.get_tied_to_file',
-        torrentsession: 'd.get_loaded_file',
-        path: 'd.get_base_path',
-        name: 'd.get_base_filename',
-        size: 'd.get_size_bytes',
-        skip: 'd.get_skip_total',
+        // bitfield: 'd.get_bitfield',
+        // free_disk_space: 'd.free_diskspace',
+        // message: 'd.get_message',
+        // torrent: 'd.get_tied_to_file',
+        // torrentsession: 'd.get_loaded_file',
+        active: 'd.is_active',
+        chunk_completed: 'd.get_completed_chunks',
+        chunk_size: 'd.get_chunk_size',
+        complete: 'd.get_complete',
         completed: 'd.get_completed_bytes',
+        createdAt: 'd.creation_date',
+        custom1: 'd.custom1',
         down_rate: 'd.get_down_rate',
         down_total: 'd.get_down_total',
+        hash: 'd.get_hash',
+        hashed: 'd.is_hash_checked',
+        hashing: 'd.is_hash_checking',
+        leechers: 'd.get_peers_accounted',
+        message: 'd.get_message',
+        name: 'd.get_base_filename',
+        open: 'd.is_open',
+        path: 'd.get_base_path',
+        seeders: 'd.get_peers_complete',
+        size: 'd.get_size_bytes',
+        skip: 'd.get_skip_total',
         up_rate: 'd.get_up_rate',
         up_total: 'd.get_up_total',
-        message: 'd.get_message',
-        bitfield: 'd.get_bitfield',
-        chunk_size: 'd.get_chunk_size',
-        chunk_completed: 'd.get_completed_chunks',
-        createdAt: 'd.creation_date',
-        active: 'd.is_active',
-        open: 'd.is_open',
-        complete: 'd.get_complete',
-        hashing: 'd.is_hash_checking',
-        hashed: 'd.is_hash_checked',
-        message: 'd.get_message',
-        leechers: 'd.get_peers_accounted',
-        seeders: 'd.get_peers_complete',
-        free_disk_space: 'd.free_diskspace',
     },
 };
 
